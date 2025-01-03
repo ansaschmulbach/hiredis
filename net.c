@@ -51,14 +51,14 @@
 void __redisSetError(redisContext *c, int type, const char *str);
 
 void redisNetClose(redisContext *c) {
-    if (c && c->fd != REDIS_INVALID_FD) {
-        close(c->fd);
-        c->fd = REDIS_INVALID_FD;
+    if (c && c->fdIn != REDIS_INVALID_FD) {
+        close(c->fdIn);
+        c->fdIn = REDIS_INVALID_FD;
     }
 }
 
 ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap) {
-    ssize_t nread = recv(c->fd, buf, bufcap, 0);
+    ssize_t nread = read(c->fdIn, buf, bufcap);
     if (nread == -1) {
         if ((errno == EWOULDBLOCK && !(c->flags & REDIS_BLOCK)) || (errno == EINTR)) {
             /* Try again later */
@@ -80,7 +80,7 @@ ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap) {
 }
 
 ssize_t redisNetWrite(redisContext *c) {
-    ssize_t nwritten = send(c->fd, c->obuf, sdslen(c->obuf), 0);
+    ssize_t nwritten = write(c->fdOut, c->obuf, sdslen(c->obuf));
     if (nwritten < 0) {
         if ((errno == EWOULDBLOCK && !(c->flags & REDIS_BLOCK)) || (errno == EINTR)) {
             /* Try again later */
@@ -105,7 +105,7 @@ static void __redisSetErrorFromErrno(redisContext *c, int type, const char *pref
 
 static int redisSetReuseAddr(redisContext *c) {
     int on = 1;
-    if (setsockopt(c->fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
+    if (setsockopt(c->fdIn, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,NULL);
         redisNetClose(c);
         return REDIS_ERR;
@@ -119,7 +119,8 @@ static int redisCreateSocket(redisContext *c, int type) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,NULL);
         return REDIS_ERR;
     }
-    c->fd = s;
+    c->fdIn = s;
+    c->fdOut = s;
     if (type == AF_INET) {
         if (redisSetReuseAddr(c) == REDIS_ERR) {
             return REDIS_ERR;
@@ -135,7 +136,7 @@ static int redisSetBlocking(redisContext *c, int blocking) {
     /* Set the socket nonblocking.
      * Note that fcntl(2) for F_GETFL and F_SETFL can't be
      * interrupted by a signal. */
-    if ((flags = fcntl(c->fd, F_GETFL)) == -1) {
+    if ((flags = fcntl(c->fdIn, F_GETFL)) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"fcntl(F_GETFL)");
         redisNetClose(c);
         return REDIS_ERR;
@@ -146,14 +147,14 @@ static int redisSetBlocking(redisContext *c, int blocking) {
     else
         flags |= O_NONBLOCK;
 
-    if (fcntl(c->fd, F_SETFL, flags) == -1) {
+    if (fcntl(c->fdIn, F_SETFL, flags) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"fcntl(F_SETFL)");
         redisNetClose(c);
         return REDIS_ERR;
     }
 #else
     u_long mode = blocking ? 0 : 1;
-    if (ioctl(c->fd, FIONBIO, &mode) == -1) {
+    if (ioctl(c->fdIn, FIONBIO, &mode) == -1) {
         __redisSetErrorFromErrno(c, REDIS_ERR_IO, "ioctl(FIONBIO)");
         redisNetClose(c);
         return REDIS_ERR;
@@ -164,9 +165,9 @@ static int redisSetBlocking(redisContext *c, int blocking) {
 
 int redisKeepAlive(redisContext *c, int interval) {
     int val = 1;
-    redisFD fd = c->fd;
+    redisFD fdIn = c->fdIn;
 
-    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1){
+    if (setsockopt(fdIn, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1){
         __redisSetError(c,REDIS_ERR_OTHER,strerror(errno));
         return REDIS_ERR;
     }
@@ -174,26 +175,26 @@ int redisKeepAlive(redisContext *c, int interval) {
     val = interval;
 
 #if defined(__APPLE__) && defined(__MACH__)
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &val, sizeof(val)) < 0) {
+    if (setsockopt(fdIn, IPPROTO_TCP, TCP_KEEPALIVE, &val, sizeof(val)) < 0) {
         __redisSetError(c,REDIS_ERR_OTHER,strerror(errno));
         return REDIS_ERR;
     }
 #else
 #if defined(__GLIBC__) && !defined(__FreeBSD_kernel__)
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &val, sizeof(val)) < 0) {
+    if (setsockopt(fdIn, IPPROTO_TCP, TCP_KEEPIDLE, &val, sizeof(val)) < 0) {
         __redisSetError(c,REDIS_ERR_OTHER,strerror(errno));
         return REDIS_ERR;
     }
 
     val = interval/3;
     if (val == 0) val = 1;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &val, sizeof(val)) < 0) {
+    if (setsockopt(fdIn, IPPROTO_TCP, TCP_KEEPINTVL, &val, sizeof(val)) < 0) {
         __redisSetError(c,REDIS_ERR_OTHER,strerror(errno));
         return REDIS_ERR;
     }
 
     val = 3;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &val, sizeof(val)) < 0) {
+    if (setsockopt(fdIn, IPPROTO_TCP, TCP_KEEPCNT, &val, sizeof(val)) < 0) {
         __redisSetError(c,REDIS_ERR_OTHER,strerror(errno));
         return REDIS_ERR;
     }
@@ -205,7 +206,7 @@ int redisKeepAlive(redisContext *c, int interval) {
 
 int redisSetTcpNoDelay(redisContext *c) {
     int yes = 1;
-    if (setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) == -1) {
+    if (setsockopt(c->fdIn, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"setsockopt(TCP_NODELAY)");
         redisNetClose(c);
         return REDIS_ERR;
@@ -241,7 +242,7 @@ static int redisContextTimeoutMsec(redisContext *c, long *result)
 static int redisContextWaitReady(redisContext *c, long msec) {
     struct pollfd   wfd[1];
 
-    wfd[0].fd     = c->fd;
+    wfd[0].fd     = c->fdIn;
     wfd[0].events = POLLOUT;
 
     if (errno == EINPROGRESS) {
@@ -272,7 +273,7 @@ static int redisContextWaitReady(redisContext *c, long msec) {
 }
 
 int redisCheckConnectDone(redisContext *c, int *completed) {
-    int rc = connect(c->fd, (const struct sockaddr *)c->saddr, c->addrlen);
+    int rc = connect(c->fdIn, (const struct sockaddr *)c->saddr, c->addrlen);
     if (rc == 0) {
         *completed = 1;
         return REDIS_OK;
@@ -295,7 +296,7 @@ int redisCheckSocketError(redisContext *c) {
     int err = 0, errno_saved = errno;
     socklen_t errlen = sizeof(err);
 
-    if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &err, &errlen) == -1) {
+    if (getsockopt(c->fdIn, SOL_SOCKET, SO_ERROR, &err, &errlen) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"getsockopt(SO_ERROR)");
         return REDIS_ERR;
     }
@@ -317,11 +318,11 @@ int redisContextSetTimeout(redisContext *c, const struct timeval tv) {
     const void *to_ptr = &tv;
     size_t to_sz = sizeof(tv);
 
-    if (setsockopt(c->fd,SOL_SOCKET,SO_RCVTIMEO,to_ptr,to_sz) == -1) {
+    if (setsockopt(c->fdIn,SOL_SOCKET,SO_RCVTIMEO,to_ptr,to_sz) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"setsockopt(SO_RCVTIMEO)");
         return REDIS_ERR;
     }
-    if (setsockopt(c->fd,SOL_SOCKET,SO_SNDTIMEO,to_ptr,to_sz) == -1) {
+    if (setsockopt(c->fdIn,SOL_SOCKET,SO_SNDTIMEO,to_ptr,to_sz) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"setsockopt(SO_SNDTIMEO)");
         return REDIS_ERR;
     }
@@ -434,7 +435,8 @@ addrretry:
         if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == REDIS_INVALID_FD)
             continue;
 
-        c->fd = s;
+        c->fdIn = s;
+        c->fdOut = s;
         if (redisSetBlocking(c,0) != REDIS_OK)
             goto error;
         if (c->tcp.source_addr) {
@@ -507,6 +509,11 @@ addrretry:
                     goto error;
             }
         }
+	
+	hi_free(c->client_addr);
+	c->client_addr = hi_malloc(sizeof(struct sockaddr));
+	getsockname(c->fdIn, c->client_addr, &c->client_addrlen);
+
         if (blocking && redisSetBlocking(c,1) != REDIS_OK)
             goto error;
 
@@ -585,7 +592,7 @@ int redisContextConnectUnix(redisContext *c, const char *path, const struct time
     c->addrlen = sizeof(struct sockaddr_un);
     sa->sun_family = AF_UNIX;
     strncpy(sa->sun_path, path, sizeof(sa->sun_path) - 1);
-    if (connect(c->fd, (struct sockaddr*)sa, sizeof(*sa)) == -1) {
+    if (connect(c->fdIn, (struct sockaddr*)sa, sizeof(*sa)) == -1) {
         if (errno == EINPROGRESS && !blocking) {
             /* This is ok. */
         } else {

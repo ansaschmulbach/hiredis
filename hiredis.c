@@ -699,7 +699,7 @@ static redisContext *redisContextInit(void) {
 
     c->obuf = sdsempty();
     c->reader = redisReaderCreate();
-    c->fd = REDIS_INVALID_FD;
+    c->fdIn = REDIS_INVALID_FD;
 
     if (c->obuf == NULL || c->reader == NULL) {
         redisFree(c);
@@ -734,10 +734,10 @@ void redisFree(redisContext *c) {
 }
 
 redisFD redisFreeKeepFd(redisContext *c) {
-    redisFD fd = c->fd;
-    c->fd = REDIS_INVALID_FD;
+    redisFD fdIn = c->fdIn;
+    c->fdIn = REDIS_INVALID_FD;
     redisFree(c);
-    return fd;
+    return fdIn;
 }
 
 int redisReconnect(redisContext *c) {
@@ -775,7 +775,7 @@ int redisReconnect(redisContext *c) {
         ret = REDIS_ERR;
     }
 
-    if (c->command_timeout != NULL && (c->flags & REDIS_BLOCK) && c->fd != REDIS_INVALID_FD) {
+    if (c->command_timeout != NULL && (c->flags & REDIS_BLOCK) && c->fdIn != REDIS_INVALID_FD) {
         redisContextSetTimeout(c, *c->command_timeout);
     }
 
@@ -821,14 +821,15 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
         redisContextConnectUnix(c, options->endpoint.unix_socket,
                                 options->connect_timeout);
     } else if (options->type == REDIS_CONN_USERFD) {
-        c->fd = options->endpoint.fd;
+        c->fdIn = options->endpoint.userfd.fdIn;
+        c->fdOut = options->endpoint.userfd.fdOut;
         c->flags |= REDIS_CONNECTED;
     } else {
         // Unknown type - FIXME - FREE
         return NULL;
     }
 
-    if (options->command_timeout != NULL && (c->flags & REDIS_BLOCK) && c->fd != REDIS_INVALID_FD) {
+    if (options->command_timeout != NULL && (c->flags & REDIS_BLOCK) && c->fdIn != REDIS_INVALID_FD) {
         redisContextSetTimeout(c, *options->command_timeout);
     }
 
@@ -896,10 +897,11 @@ redisContext *redisConnectUnixNonBlock(const char *path) {
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectFd(redisFD fd) {
+redisContext *redisConnectFd(redisFD fdIn, redisFD fdOut) {
     redisOptions options = {0};
     options.type = REDIS_CONN_USERFD;
-    options.endpoint.fd = fd;
+    options.endpoint.userfd.fdIn = fdIn;
+    options.endpoint.userfd.fdOut = fdOut;
     return redisConnectWithOptions(&options);
 }
 

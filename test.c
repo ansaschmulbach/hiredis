@@ -203,12 +203,12 @@ static redisContext *do_connect(struct config config) {
         c = redisConnectUnix(config.unix_sock.path);
     } else if (config.type == CONN_FD) {
         /* Create a dummy connection just to get an fd to inherit */
-        redisContext *dummy_ctx = redisConnectUnix(config.unix_sock.path);
-        if (dummy_ctx) {
-            int fd = disconnect(dummy_ctx, 1);
-            printf("Connecting to inherited fd %d\n", fd);
-            c = redisConnectFd(fd);
-        }
+        // redisContext *dummy_ctx = redisConnectUnix(config.unix_sock.path);
+        // if (dummy_ctx) {
+        //     int fd = disconnect(dummy_ctx, 1);
+        //     printf("Connecting to inherited fd %d\n", fd);
+        //     c = redisConnectFd(fd);
+        // }
     } else {
         assert(NULL);
     }

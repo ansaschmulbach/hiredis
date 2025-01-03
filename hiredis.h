@@ -190,10 +190,15 @@ typedef struct {
         } tcp;
         /** use this field for unix domain sockets */
         const char *unix_socket;
+
         /**
          * use this field to have hiredis operate an already-open
          * file descriptor */
-        redisFD fd;
+	struct {
+		redisFD fdIn;
+		redisFD fdOut;
+	} userfd;
+
     } endpoint;
 
     /* Optional user defined data/destructor */
@@ -235,7 +240,8 @@ typedef struct redisContext {
 
     int err; /* Error flags, 0 when there is no error */
     char errstr[128]; /* String representation of error when applicable */
-    redisFD fd;
+    redisFD fdIn;
+    redisFD fdOut;
     int flags;
     char *obuf; /* Write buffer */
     redisReader *reader; /* Protocol reader */
@@ -257,6 +263,9 @@ typedef struct redisContext {
     /* For non-blocking connect */
     struct sockadr *saddr;
     size_t addrlen;
+
+    struct sockaddr *client_addr;
+    unsigned int client_addrlen;
 
     /* Optional data and corresponding destructor users can use to provide
      * context to a given redisContext.  Not used by hiredis. */
@@ -282,7 +291,7 @@ redisContext *redisConnectBindNonBlockWithReuse(const char *ip, int port,
 redisContext *redisConnectUnix(const char *path);
 redisContext *redisConnectUnixWithTimeout(const char *path, const struct timeval tv);
 redisContext *redisConnectUnixNonBlock(const char *path);
-redisContext *redisConnectFd(redisFD fd);
+redisContext *redisConnectFd(redisFD fdIn, redisFD fdOut);
 
 /**
  * Reconnect the given context using the saved information.
